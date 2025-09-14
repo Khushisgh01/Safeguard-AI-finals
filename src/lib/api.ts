@@ -1,6 +1,7 @@
+
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = (import.meta.env as Record<string, any>).VITE_API_BASE_URL || 'http://localhost:5000/api';
 
 function getAuthToken(): string | null {
   try {
@@ -10,7 +11,12 @@ function getAuthToken(): string | null {
   }
 }
 
-export async function apiRequest<T>(path: string, method: HttpMethod, body?: unknown, customHeaders?: Record<string, string>): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  method: HttpMethod,
+  body?: unknown,
+  customHeaders?: Record<string, string>
+): Promise<T> {
   const token = getAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -36,23 +42,24 @@ export async function apiRequest<T>(path: string, method: HttpMethod, body?: unk
   return res.json() as Promise<T>;
 }
 
+/* ----------------- existing APIs (unchanged) ----------------- */
 export const AuthAPI = {
-  async register(payload: { firstName: string; lastName: string; email: string; password: string; phone?: string; }): Promise<{ success: boolean; data: { user: any; token: string } }> {
+  register(payload: { firstName: string; lastName: string; email: string; password: string; phone?: string; }): Promise<{ success: boolean; data: { user: any; token: string } }> {
     return apiRequest('/auth/register', 'POST', payload);
   },
-  async login(payload: { email: string; password: string }): Promise<{ success: boolean; data: { user: any; token: string } }> {
+  login(payload: { email: string; password: string }): Promise<{ success: boolean; data: { user: any; token: string } }> {
     return apiRequest('/auth/login', 'POST', payload);
   },
-  async me(): Promise<{ success: boolean; data: { user: any } }> {
+  me(): Promise<{ success: boolean; data: { user: any } }> {
     return apiRequest('/auth/me', 'GET');
   },
 };
 
 export const ContactAPI = {
-  async getContacts(): Promise<{ success: boolean; data: { contacts: any[] } }> {
+  getContacts(): Promise<{ success: boolean; data: { contacts: any[] } }> {
     return apiRequest('/contacts', 'GET');
   },
-  async createContact(payload: {
+  createContact(payload: {
     contactType: string;
     firstName: string;
     lastName: string;
@@ -63,32 +70,57 @@ export const ContactAPI = {
   }): Promise<{ success: boolean; data: { contact: any } }> {
     return apiRequest('/contacts', 'POST', payload);
   },
-  async updateContact(id: string, payload: any): Promise<{ success: boolean; data: { contact: any } }> {
+  updateContact(id: string, payload: any): Promise<{ success: boolean; data: { contact: any } }> {
     return apiRequest(`/contacts/${id}`, 'PUT', payload);
   },
-  async deleteContact(id: string): Promise<{ success: boolean }> {
+  deleteContact(id: string): Promise<{ success: boolean }> {
     return apiRequest(`/contacts/${id}`, 'DELETE');
   },
 };
 
 export const AlertAPI = {
-  async getAlerts(): Promise<{ success: boolean; data: { alerts: any[] } }> {
+  getAlerts(): Promise<{ success: boolean; data: { alerts: any[] } }> {
     return apiRequest('/alerts', 'GET');
   },
-  async sendWatchTest(): Promise<{ success: boolean; result?: any }> {
+  sendWatchTest(): Promise<{ success: boolean; result?: any }> {
     return apiRequest('/alerts/push-test', 'POST');
   },
-  async triggerSOS(payload: {
-    location?: string;
-    includeEmergencyCall?: boolean;
-  }): Promise<{ success: boolean; data: { alert: any; sosResult: any; emergencyCallResult: any; contactResults: any[] } }> {
+  triggerSOS(payload: { location?: string; includeEmergencyCall?: boolean; }): Promise<{ success: boolean; data: { alert: any; sosResult: any; emergencyCallResult: any; contactResults: any[] } }> {
     return apiRequest('/alerts/sos', 'POST', payload);
   },
-  async triggerEmergencyCall(payload: {
-    location?: string;
-  }): Promise<{ success: boolean; data: { alert: any; emergencyCallResult: any; contactResults: any[] } }> {
+  triggerEmergencyCall(payload: { location?: string; }): Promise<{ success: boolean; data: { alert: any; emergencyCallResult: any; contactResults: any[] } }> {
     return apiRequest('/alerts/emergency-call', 'POST', payload);
   },
 };
 
+/* ----------------- NEW: Monitoring API ----------------- */
+export const MonitoringAPI = {
+  startSession(payload: {
+    deviceInfo: { deviceId: string; deviceType: string; location?: string };
+    aiAnalysis?: { confidence?: number };
+    privacySettings?: { videoRecording?: boolean; dataRetention?: number; anonymization?: boolean };
+  }): Promise<{ success: boolean; data: { monitoring: any; sessionId: string } }> {
+    return apiRequest('/monitoring/start', 'POST', payload);
+  },
 
+  stopSession(sessionId: string): Promise<{ success: boolean; data: { monitoring: any } }> {
+    return apiRequest(`/monitoring/stop/${encodeURIComponent(sessionId)}`, 'PUT');
+  },
+
+  /** fast path used by LiveMonitor to send FALL/INACTIVITY/NORMAL */
+  postEvent(payload: {
+    sessionId: string;
+    type: 'FALL' | 'INACTIVITY' | 'NORMAL' | string;
+    confidence?: number;
+    durationMs?: number;
+    location?: string;
+    coordinates?: { lat?: number; lng?: number; x?: number; y?: number; bbox?: any };
+    modelVersion?: string;
+  }): Promise<{ success: true; data: { danger: boolean; alertId?: string; thresholds: { inactivityMs: number } } }> {
+    return apiRequest('/monitoring/event', 'POST', payload);
+  },
+
+  getConfig(): Promise<{ success: true; data: { inactivityThresholdMs: number; cooldownMs: number } }> {
+    return apiRequest('/monitoring/config', 'GET');
+  },
+};

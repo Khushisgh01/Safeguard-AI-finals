@@ -1,133 +1,65 @@
-const twilio = require('twilio');
 
-function createClient() {
-  const service = (process.env.SMS_SERVICE || '').toLowerCase();
-  if (service !== 'twilio') {
-    return null;
-  }
-  const accountSid = process.env.SMS_ACCOUNT_SID;
-  const authToken = process.env.SMS_AUTH_TOKEN;
-  if (!accountSid || !authToken || accountSid === 'your-twilio-account-sid') {
-    return null;
-  }
+
+// backend/services/smsService.js
+const isConfigured =
+  !!process.env.SMS_ACCOUNT_SID &&
+  !!process.env.SMS_AUTH_TOKEN &&
+  !!process.env.SMS_FROM_NUMBER &&
+  process.env.SMS_ACCOUNT_SID.startsWith('AC') &&
+  process.env.SMS_ACCOUNT_SID.length > 10;
+
+let client = null;
+if (isConfigured) {
   try {
-    return twilio(accountSid, authToken);
-  } catch (e) {
-    return null;
+    const twilio = require('twilio');
+    client = twilio(process.env.SMS_ACCOUNT_SID, process.env.SMS_AUTH_TOKEN);
+  } catch (error) {
+    console.warn('Failed to initialize Twilio client:', error.message);
+    client = null;
   }
 }
 
-const client = createClient();
-
-function formatAlertMessage(alert) {
-  const severity = alert.severity.toUpperCase();
-  const location = alert.location || 'Unknown location';
-  const timestamp = new Date(alert.timestamp).toLocaleString();
-  
-  return `🚨 ${severity} ALERT 🚨
-
-${alert.title}
-
-📍 Location: ${location}
-⏰ Time: ${timestamp}
-📝 Description: ${alert.description}
-
-This is an automated alert from FamilySafe AI.
-Please respond immediately if needed.
-
-- FamilySafe AI System`;
+/** Send one SMS (Twilio if configured, otherwise mock-log). */
+async function sendSMS(to, body) {
+  if (!to || !body) throw new Error('Missing SMS "to" or "body"');
+  // Normalize phone number to E.164 if possible. If no leading '+',
+  // prepend default country code from env (e.g., +91) for local testing.
+  const defaultCountryCode = process.env.SMS_DEFAULT_COUNTRY_CODE || '+91';
+  const digitsOnly = String(to).replace(/[^\d+]/g, '');
+  const normalizedTo = digitsOnly.startsWith('+')
+    ? digitsOnly
+    : `${defaultCountryCode}${digitsOnly.replace(/^0+/, '')}`;
+  if (!isConfigured) {
+    console.log(`[MOCK SMS] to=${normalizedTo} body="${body}"`);
+    return { status: 'mocked', to: normalizedTo };
+  }
+  const msg = await client.messages.create({
+    to: normalizedTo,
+    from: process.env.SMS_FROM_NUMBER,
+    body,
+  });
+  return { status: 'sent', sid: msg.sid, to: normalizedTo };
 }
 
+/** Send to many numbers (best effort). */
+async function sendMany(numbers, body) {
+  const unique = [...new Set(numbers.filter(Boolean))];
+  const results = await Promise.allSettled(unique.map(n => sendSMS(n, body)));
+  return results.map((r, i) =>
+    r.status === 'fulfilled'
+      ? { to: unique[i], ok: true, data: r.value }
+      : { to: unique[i], ok: false, error: r.reason?.message || String(r.reason) }
+  );
+}
+
+/** Compatibility helper used by alerts.js */
 async function sendAlertSMS(to, alert) {
-  if (!client) {
-    // Mock SMS sending for development
-    console.log(`[MOCK SMS] Would send to ${to}:`);
-    console.log(formatAlertMessage(alert));
-    console.log('--- End Mock SMS ---');
-    
-    // Simulate a small delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    return {
-      success: true,
-      messageId: `mock_${Date.now()}`,
-      status: 'sent',
-      mock: true
-    };
-  }
-
-  const fromNumber = process.env.SMS_FROM_NUMBER;
-  if (!fromNumber) {
-    throw new Error('Missing SMS_FROM_NUMBER');
-  }
-
-  const message = formatAlertMessage(alert);
-
-  try {
-    const result = await client.messages.create({
-      to: to,
-      from: fromNumber,
-      body: message
-    });
-
-    console.log(`SMS sent successfully to ${to}. SID: ${result.sid}`);
-    return {
-      success: true,
-      messageId: result.sid,
-      status: 'sent'
-    };
-  } catch (error) {
-    console.error('Failed to send SMS:', error);
-    throw new Error(`Failed to send SMS: ${error.message}`);
-  }
+  const text =
+    `[FamilySafe] ${alert.title}\n` +
+    `${alert.description}\n` +
+    (alert.location ? `Location: ${alert.location}\n` : '') +
+    `Severity: ${String(alert.severity).toUpperCase()}`;
+  return sendSMS(to, text);
 }
 
-async function sendSMS(to, message) {
-  if (!client) {
-    // Mock SMS sending for development
-    console.log(`[MOCK SMS] Would send to ${to}:`);
-    console.log(message);
-    console.log('--- End Mock SMS ---');
-    
-    // Simulate a small delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    return {
-      success: true,
-      messageId: `mock_${Date.now()}`,
-      status: 'sent',
-      mock: true
-    };
-  }
-
-  const fromNumber = process.env.SMS_FROM_NUMBER;
-  if (!fromNumber) {
-    throw new Error('Missing SMS_FROM_NUMBER');
-  }
-
-  try {
-    const result = await client.messages.create({
-      to: to,
-      from: fromNumber,
-      body: message
-    });
-
-    console.log(`SMS sent successfully to ${to}. SID: ${result.sid}`);
-    return {
-      success: true,
-      messageId: result.sid,
-      status: 'sent'
-    };
-  } catch (error) {
-    console.error('Failed to send SMS:', error);
-    throw new Error(`Failed to send SMS: ${error.message}`);
-  }
-}
-
-module.exports = {
-  sendAlertSMS,
-  sendSMS,
-  isConfigured: !!client
-};
-
-
+module.exports = { sendSMS, sendMany, sendAlertSMS, isConfigured };

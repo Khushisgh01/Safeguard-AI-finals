@@ -527,7 +527,12 @@ router.post('/sos', protect, async (req, res) => {
 
       if (contact.notificationPreferences.sms.enabled) {
         await alert.addNotification(contact._id, 'sms');
-        // If you want to actually send SMS here, hook into smsService like in create-alert
+        try {
+          await smsService.sendAlertSMS(contact.phone, alert);
+          await alert.updateNotificationStatus(contact._id, 'sent', 'SMS sent');
+        } catch (err) {
+          await alert.updateNotificationStatus(contact._id, 'failed', err?.message || 'SMS failed');
+        }
       }
 
       if (contact.notificationPreferences.push.enabled) {
